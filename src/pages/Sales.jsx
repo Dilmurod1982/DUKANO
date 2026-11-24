@@ -18,28 +18,38 @@ import {
 } from "firebase/firestore";
 import { useAuthStore } from "../store/authStore";
 import { useLogger } from "../hooks/useLogger";
-import { formatNumberDisplay, parseNumberInput } from "../lib/numberFormat";
+import {
+  formatNumberDisplay,
+  parseNumberInput,
+  formatNumberInput,
+} from "../lib/numberFormat";
 
 export default function Sales() {
   const { t } = useTranslation();
-  const { user, role } = useAuthStore();
+  const { user } = useAuthStore();
   const { logCreate, logError } = useLogger();
 
   const [loading, setLoading] = useState(true);
   const [shift, setShift] = useState(null);
-  const [openingCash, setOpeningCash] = useState("");
   const [openingShift, setOpeningShift] = useState(false);
   const [err, setErr] = useState("");
 
   // корзина
-  const [cart, setCart] = useState([]); // [{barcode, name, unit, qty, salePrice, batchItemId}]
+  const [cart, setCart] = useState([]);
   const [scanValue, setScanValue] = useState("");
   const [busy, setBusy] = useState(false);
   const scanRef = useRef(null);
 
+  // поиск товаров
+  const [searchName, setSearchName] = useState("");
+  const [searchPrice, setSearchPrice] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [showResults, setShowResults] = useState(false);
+  const searchWrapperRef = useRef(null);
+
   // модалка закрытия смены
   const [closeModal, setCloseModal] = useState(false);
-  const [closingCash, setClosingCash] = useState("");
   const [salesList, setSalesList] = useState([]);
 
   // Загрузка текущей смены продавца
@@ -70,20 +80,31 @@ export default function Sales() {
     loadShift();
   }, [user?.email]);
 
-  // Открытие смены
+  // Закрытие выпадающего списка поиска по клику вне
+  useEffect(() => {
+    const onClick = (e) => {
+      if (
+        searchWrapperRef.current &&
+        !searchWrapperRef.current.contains(e.target)
+      ) {
+        setShowResults(false);
+      }
+    };
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  // Открытие смены — одной кнопкой
   const handleOpenShift = async (e) => {
-    e.preventDefault();
+    e?.preventDefault?.();
     setErr("");
     if (!user?.email) return;
     setOpeningShift(true);
     try {
-      const cash = parseNumberInput(openingCash) || 0;
       const ref = await addDoc(collection(db, "shifts"), {
         sellerEmail: user.email,
         sellerUid: user.uid,
         status: "open",
-        openingCash: cash,
-        closingCash: null,
         totalSales: 0,
         totalQty: 0,
         salesCount: 0,
@@ -96,16 +117,15 @@ export default function Sales() {
         id: ref.id,
         sellerEmail: user.email,
         status: "open",
-        openingCash: cash,
+        totalSales: 0,
+        totalQty: 0,
+        salesCount: 0,
       });
-      setOpeningCash("");
       await logCreate(
         "transactions",
         `Открыта смена продавца ${user.email}`,
         ref.id,
-        {
-          openingCash: cash,
-        }
+        {}
       );
     } catch (e) {
       setErr(e.message);
@@ -128,7 +148,42 @@ export default function Sales() {
     return { id: d.id, ...d.data() };
   };
 
-  // Добавление в корзину по штрихкоду
+  const pushToCart = (item) => {
+    const remaining =
+      item.remainingQty != null
+        ? Number(item.remainingQty)
+        : Number(item.qty) || 0;
+    if (remaining <= 0) {
+      setErr(t("noStock"));
+      return;
+    }
+    setCart((prev) => {
+      const idx = prev.findIndex((x) => x.batchItemId === item.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        const currentQty = copy[idx].qty;
+        if (currentQty + 1 > remaining) {
+          setErr(t("notEnoughStock"));
+          return prev;
+        }
+        copy[idx] = { ...copy[idx], qty: currentQty + 1 };
+        return copy;
+      }
+      return [
+        ...prev,
+        {
+          batchItemId: item.id,
+          barcode: item.barcode,
+          name: item.name,
+          unit: item.unit,
+          salePrice: Number(item.salePrice) || 0,
+          qty: 1,
+          maxQty: remaining,
+        },
+      ];
+    });
+  };
+
   const addByBarcode = async (e) => {
     e?.preventDefault?.();
     const code = scanValue.trim();
@@ -141,39 +196,7 @@ export default function Sales() {
         setErr(t("barcodeNotFound"));
         return;
       }
-      const remaining =
-        item.remainingQty != null
-          ? Number(item.remainingQty)
-          : Number(item.qty) || 0;
-      if (remaining <= 0) {
-        setErr(t("noStock"));
-        return;
-      }
-      setCart((prev) => {
-        const idx = prev.findIndex((x) => x.batchItemId === item.id);
-        if (idx >= 0) {
-          const copy = [...prev];
-          const currentQty = copy[idx].qty;
-          if (currentQty + 1 > remaining) {
-            setErr(t("notEnoughStock"));
-            return prev;
-          }
-          copy[idx] = { ...copy[idx], qty: currentQty + 1 };
-          return copy;
-        }
-        return [
-          ...prev,
-          {
-            batchItemId: item.id,
-            barcode: item.barcode,
-            name: item.name,
-            unit: item.unit,
-            salePrice: Number(item.salePrice) || 0,
-            qty: 1,
-            maxQty: remaining,
-          },
-        ];
-      });
+      pushToCart(item);
       setScanValue("");
       scanRef.current?.focus();
     } catch (e) {
@@ -183,7 +206,62 @@ export default function Sales() {
     }
   };
 
-  // Изменение количества в корзине
+  const performSearch = async () => {
+    setErr("");
+    const nameQ = searchName.trim().toLowerCase();
+    const priceQ = parseNumberInput(searchPrice);
+    if (!nameQ && (searchPrice === "" || isNaN(priceQ))) {
+      setSearchResults([]);
+      setShowResults(false);
+      return;
+    }
+
+    setSearching(true);
+    try {
+      const q = query(collection(db, "batchItems"), limit(500));
+      const snap = await getDocs(q);
+      const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      const filtered = all.filter((it) => {
+        const remaining =
+          it.remainingQty != null
+            ? Number(it.remainingQty)
+            : Number(it.qty) || 0;
+        if (remaining <= 0) return false;
+        if (nameQ) {
+          const inName = it.name?.toLowerCase().includes(nameQ);
+          const inBarcode = it.barcode?.toLowerCase().includes(nameQ);
+          if (!inName && !inBarcode) return false;
+        }
+        if (searchPrice !== "" && !isNaN(priceQ)) {
+          const price = Number(it.salePrice) || 0;
+          if (Math.abs(price - priceQ) > 0.01) return false;
+        }
+        return true;
+      });
+      setSearchResults(filtered.slice(0, 20));
+      setShowResults(true);
+    } catch (e) {
+      setErr(e.message);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const onSearchEnter = (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      performSearch();
+    }
+  };
+
+  const pickSearchResult = (item) => {
+    pushToCart(item);
+    setShowResults(false);
+    setSearchResults([]);
+    setSearchName("");
+    setSearchPrice("");
+  };
+
   const updateCartQty = (idx, value) => {
     const qty = Math.max(0, Math.floor(Number(value) || 0));
     setCart((prev) => {
@@ -205,7 +283,6 @@ export default function Sales() {
   );
   const cartQty = useMemo(() => cart.reduce((s, x) => s + x.qty, 0), [cart]);
 
-  // Завершение продажи
   const handleCheckout = async () => {
     if (cart.length === 0) return;
     if (!shift) return;
@@ -224,7 +301,6 @@ export default function Sales() {
       const totalAmount = items.reduce((s, x) => s + x.total, 0);
       const totalQty = items.reduce((s, x) => s + x.qty, 0);
 
-      // 1. sales
       const saleRef = await addDoc(collection(db, "sales"), {
         shiftId: shift.id,
         sellerEmail: user.email,
@@ -235,7 +311,6 @@ export default function Sales() {
         createdAtIso: new Date().toISOString(),
       });
 
-      // 2. batchItems — уменьшаем remainingQty
       for (const it of items) {
         const ref = doc(db, "batchItems", it.batchItemId);
         const snap = await getDoc(ref);
@@ -250,7 +325,6 @@ export default function Sales() {
         }
       }
 
-      // 3. transactions — по строке на каждый товар (type: sale)
       for (const it of items) {
         await addDoc(collection(db, "transactions"), {
           type: "sale",
@@ -268,7 +342,6 @@ export default function Sales() {
         });
       }
 
-      // 4. shift — обновляем суммы
       const shiftRef = doc(db, "shifts", shift.id);
       const shiftSnap = await getDoc(shiftRef);
       const sd = shiftSnap.data() || {};
@@ -278,7 +351,6 @@ export default function Sales() {
         salesCount: (Number(sd.salesCount) || 0) + 1,
       });
 
-      // 5. аудит
       await logCreate(
         "transactions",
         `Продажа на ${formatNumberDisplay(totalAmount)} (${totalQty} ед., чек ${
@@ -288,7 +360,6 @@ export default function Sales() {
         { shiftId: shift.id, totalAmount, totalQty, items }
       );
 
-      // сброс корзины и обновление смены
       setCart([]);
       const shiftSnap2 = await getDoc(shiftRef);
       if (shiftSnap2.exists()) {
@@ -302,11 +373,8 @@ export default function Sales() {
     }
   };
 
-  // Открытие модалки закрытия смены
   const openCloseModal = async () => {
     setCloseModal(true);
-    setClosingCash("");
-    // загрузка списка продаж смены
     try {
       const q = query(
         collection(db, "sales"),
@@ -321,16 +389,13 @@ export default function Sales() {
     }
   };
 
-  // Закрытие смены
   const handleCloseShift = async () => {
     setErr("");
     setBusy(true);
     try {
-      const cash = parseNumberInput(closingCash) || 0;
       const ref = doc(db, "shifts", shift.id);
       await updateDoc(ref, {
         status: "closed",
-        closingCash: cash,
         closedAt: serverTimestamp(),
         closedBy: user.email,
       });
@@ -338,16 +403,13 @@ export default function Sales() {
         "transactions",
         `Смена закрыта. Продаж: ${
           shift.salesCount || 0
-        }, выручка: ${formatNumberDisplay(
-          shift.totalSales || 0
-        )}, касса: ${formatNumberDisplay(cash)}`,
+        }, выручка: ${formatNumberDisplay(shift.totalSales || 0)}`,
         shift.id,
-        { closingCash: cash, totalSales: shift.totalSales || 0 }
+        { totalSales: shift.totalSales || 0 }
       );
       setShift(null);
       setCart([]);
       setCloseModal(false);
-      setClosingCash("");
     } catch (e) {
       setErr(e.message);
       await logError("transactions", `Ошибка закрытия смены: ${e.message}`);
@@ -358,7 +420,7 @@ export default function Sales() {
 
   if (loading) return <p className="text-gray-500 text-sm">...</p>;
 
-  // Экран открытия смены
+  // Экран открытия смены — только кнопка
   if (!shift) {
     return (
       <div className="space-y-4 max-w-md mx-auto">
@@ -367,27 +429,14 @@ export default function Sales() {
         </h2>
         <Card>
           <p className="text-sm text-gray-500 mb-3">{t("openShiftHint")}</p>
-          <form onSubmit={handleOpenShift} className="space-y-3">
-            <div>
-              <label className="block text-sm mb-1">{t("openingCash")}</label>
-              <input
-                type="text"
-                inputMode="decimal"
-                value={openingCash}
-                onChange={(e) => setOpeningCash(e.target.value)}
-                className="input-field"
-                placeholder="0"
-              />
-            </div>
-            {err && <p className="text-red-500 text-sm">{err}</p>}
-            <button
-              type="submit"
-              disabled={openingShift}
-              className="btn-primary w-full disabled:opacity-50"
-            >
-              {openingShift ? "..." : t("openShift")}
-            </button>
-          </form>
+          {err && <p className="text-red-500 text-sm mb-2">{err}</p>}
+          <button
+            onClick={handleOpenShift}
+            disabled={openingShift}
+            className="btn-primary w-full disabled:opacity-50"
+          >
+            {openingShift ? "..." : t("openShift")}
+          </button>
         </Card>
       </div>
     );
@@ -400,8 +449,10 @@ export default function Sales() {
         <div>
           <h2 className="text-2xl font-bold">{t("sales")}</h2>
           <p className="text-sm text-gray-500">
-            {t("shiftOpened")} · {t("openingCash")}:{" "}
-            {formatNumberDisplay(shift.openingCash || 0)}
+            {t("shiftOpened")} ·{" "}
+            {new Date(
+              shift.openedAt?.toDate?.() || Date.now()
+            ).toLocaleString()}
           </p>
         </div>
         <button
@@ -412,8 +463,7 @@ export default function Sales() {
         </button>
       </div>
 
-      {/* Статистика смены */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <Card>
           <p className="text-xs text-gray-500">{t("salesCount")}</p>
           <p className="text-xl font-bold">{shift.salesCount || 0}</p>
@@ -430,15 +480,8 @@ export default function Sales() {
             {formatNumberDisplay(shift.totalSales || 0)}
           </p>
         </Card>
-        <Card>
-          <p className="text-xs text-gray-500">{t("cartTotal")}</p>
-          <p className="text-xl font-bold text-primary-600">
-            {formatNumberDisplay(cartTotal)}
-          </p>
-        </Card>
       </div>
 
-      {/* Сканер */}
       <Card>
         <form onSubmit={addByBarcode} className="flex gap-2">
           <input
@@ -460,7 +503,93 @@ export default function Sales() {
         </form>
       </Card>
 
-      {/* Корзина */}
+      <Card>
+        <h3 className="font-semibold mb-3 text-sm">
+          {t("searchProductsTitle")}
+        </h3>
+        <div className="relative" ref={searchWrapperRef}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <input
+              type="text"
+              value={searchName}
+              onChange={(e) => setSearchName(e.target.value)}
+              onKeyDown={onSearchEnter}
+              placeholder={t("searchByNameOrBarcode")}
+              className="input-field"
+            />
+            <input
+              type="text"
+              inputMode="decimal"
+              value={searchPrice}
+              onChange={(e) =>
+                setSearchPrice(formatNumberInput(e.target.value))
+              }
+              onKeyDown={onSearchEnter}
+              placeholder={t("searchByPrice")}
+              className="input-field"
+            />
+          </div>
+          <div className="flex gap-2 mt-2">
+            <button
+              type="button"
+              onClick={performSearch}
+              disabled={searching}
+              className="btn-primary flex-1 disabled:opacity-50"
+            >
+              {searching ? "..." : t("search")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSearchName("");
+                setSearchPrice("");
+                setSearchResults([]);
+                setShowResults(false);
+              }}
+              className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700"
+            >
+              {t("clear")}
+            </button>
+          </div>
+
+          {showResults && (
+            <ul className="absolute z-40 left-0 right-0 mt-1 max-h-72 overflow-y-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
+              {searchResults.length === 0 ? (
+                <li className="px-3 py-2 text-sm text-gray-500">
+                  {t("noProductsFound")}
+                </li>
+              ) : (
+                searchResults.map((r) => (
+                  <li
+                    key={r.id}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      pickSearchResult(r);
+                    }}
+                    className="px-3 py-2 cursor-pointer text-sm hover:bg-gray-100 dark:hover:bg-gray-700"
+                  >
+                    <div className="flex justify-between gap-2">
+                      <div>
+                        <div className="font-medium">{r.name}</div>
+                        <div className="text-xs text-gray-500 font-mono">
+                          {r.barcode || "—"}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-semibold">
+                          {formatNumberDisplay(r.salePrice)}
+                        </div>
+                        <div className="text-xs text-gray-500">{r.unit}</div>
+                      </div>
+                    </div>
+                  </li>
+                ))
+              )}
+            </ul>
+          )}
+        </div>
+      </Card>
+
       <Card>
         <h3 className="font-semibold mb-3">
           {t("cart")}{" "}
@@ -563,7 +692,6 @@ export default function Sales() {
         </div>
       </Card>
 
-      {/* Модалка закрытия смены */}
       {closeModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-900 rounded-card w-full max-w-md p-5 max-h-[90vh] overflow-y-auto">
@@ -595,16 +723,6 @@ export default function Sales() {
                 </span>
               </div>
             </div>
-
-            <label className="block text-sm mb-1">{t("closingCash")}</label>
-            <input
-              type="text"
-              inputMode="decimal"
-              value={closingCash}
-              onChange={(e) => setClosingCash(e.target.value)}
-              className="input-field mb-3"
-              placeholder="0"
-            />
 
             {salesList.length > 0 && (
               <div className="mb-3">

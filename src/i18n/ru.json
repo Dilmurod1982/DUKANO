@@ -129,5 +129,11 @@
   "add": "Добавить",
   "sum": "Сумма",
   "remove": "Удалить",
-  "lastSales": "Последние продажи"
+  "lastSales": "Последние продажи",
+  "searchProductsTitle": "Поиск товара",
+  
+  "searchByPrice": "Поиск по цене",
+  
+  "clear": "Очистить",
+  "noProductsFound": "Ничего не найдено"
   }
