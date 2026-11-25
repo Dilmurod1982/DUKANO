@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "firebase": "^13.4.0",
+    "html5-qrcode": "^2.3.8",
     "i18next": "^27.2.5",
     "jsbarcode": "^3.12.3",
     "react": "^18.2.0",

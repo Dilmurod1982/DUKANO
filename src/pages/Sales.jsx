@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import Card from "../components/Card";
+import BarcodeScannerModal from "../components/BarcodeScannerModal";
 import { db } from "../firebase/config";
 import {
   collection,
@@ -39,6 +40,9 @@ export default function Sales() {
   const [scanValue, setScanValue] = useState("");
   const [busy, setBusy] = useState(false);
   const scanRef = useRef(null);
+
+  // камера
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   // поиск товаров
   const [searchName, setSearchName] = useState("");
@@ -94,7 +98,7 @@ export default function Sales() {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  // Открытие смены — одной кнопкой
+  // Открытие смены
   const handleOpenShift = async (e) => {
     e?.preventDefault?.();
     setErr("");
@@ -120,6 +124,7 @@ export default function Sales() {
         totalSales: 0,
         totalQty: 0,
         salesCount: 0,
+        openedAt: { toDate: () => new Date() },
       });
       await logCreate(
         "transactions",
@@ -184,14 +189,14 @@ export default function Sales() {
     });
   };
 
-  const addByBarcode = async (e) => {
-    e?.preventDefault?.();
-    const code = scanValue.trim();
-    if (!code) return;
+  // Обработка кода из поля ввода или камеры
+  const handleAddByCode = async (code) => {
+    const trimmed = String(code || "").trim();
+    if (!trimmed) return;
     setErr("");
     setBusy(true);
     try {
-      const item = await findItemByBarcode(code);
+      const item = await findItemByBarcode(trimmed);
       if (!item) {
         setErr(t("barcodeNotFound"));
         return;
@@ -204,6 +209,17 @@ export default function Sales() {
     } finally {
       setBusy(false);
     }
+  };
+
+  const addByBarcode = async (e) => {
+    e?.preventDefault?.();
+    await handleAddByCode(scanValue);
+  };
+
+  const onScannerResult = async (code) => {
+    setScannerOpen(false);
+    setScanValue(code);
+    await handleAddByCode(code);
   };
 
   const performSearch = async () => {
@@ -420,7 +436,7 @@ export default function Sales() {
 
   if (loading) return <p className="text-gray-500 text-sm">...</p>;
 
-  // Экран открытия смены — только кнопка
+  // Экран открытия смены
   if (!shift) {
     return (
       <div className="space-y-4 max-w-md mx-auto">
@@ -450,9 +466,9 @@ export default function Sales() {
           <h2 className="text-2xl font-bold">{t("sales")}</h2>
           <p className="text-sm text-gray-500">
             {t("shiftOpened")} ·{" "}
-            {new Date(
-              shift.openedAt?.toDate?.() || Date.now()
-            ).toLocaleString()}
+            {shift.openedAt?.toDate
+              ? shift.openedAt.toDate().toLocaleString()
+              : new Date().toLocaleString()}
           </p>
         </div>
         <button
@@ -482,6 +498,7 @@ export default function Sales() {
         </Card>
       </div>
 
+      {/* Сканер по штрихкоду + камера */}
       <Card>
         <form onSubmit={addByBarcode} className="flex gap-2">
           <input
@@ -491,8 +508,15 @@ export default function Sales() {
             onChange={(e) => setScanValue(e.target.value)}
             placeholder={t("scanOrEnterBarcode")}
             className="input-field flex-1"
-            autoFocus
           />
+          <button
+            type="button"
+            onClick={() => setScannerOpen(true)}
+            className="px-4 py-2 rounded-lg bg-gray-200 dark:bg-gray-700 hover:bg-gray-300 dark:hover:bg-gray-600"
+            title={t("scanWithCamera")}
+          >
+            📷
+          </button>
           <button
             type="submit"
             disabled={busy || !scanValue.trim()}
@@ -503,6 +527,7 @@ export default function Sales() {
         </form>
       </Card>
 
+      {/* Поиск по названию/штрихкоду и по цене */}
       <Card>
         <h3 className="font-semibold mb-3 text-sm">
           {t("searchProductsTitle")}
@@ -590,6 +615,7 @@ export default function Sales() {
         </div>
       </Card>
 
+      {/* Корзина */}
       <Card>
         <h3 className="font-semibold mb-3">
           {t("cart")}{" "}
@@ -692,6 +718,7 @@ export default function Sales() {
         </div>
       </Card>
 
+      {/* Модалка закрытия смены */}
       {closeModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-900 rounded-card w-full max-w-md p-5 max-h-[90vh] overflow-y-auto">
@@ -766,6 +793,14 @@ export default function Sales() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Модалка сканера камеры */}
+      {scannerOpen && (
+        <BarcodeScannerModal
+          onClose={() => setScannerOpen(false)}
+          onScan={onScannerResult}
+        />
       )}
     </div>
   );
