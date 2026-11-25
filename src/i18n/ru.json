@@ -135,5 +135,8 @@
   "searchByPrice": "Поиск по цене",
   
   "clear": "Очистить",
-  "noProductsFound": "Ничего не найдено"
+  "noProductsFound": "Ничего не найдено",
+  "productNotFound": "Товар с таким штрихкодом не найден",
+  "productNotFoundByName": "Товар с такими параметрами не найден",
+  "productOutOfStock": "Этого товара нет на складе"
   }

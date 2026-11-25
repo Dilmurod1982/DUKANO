@@ -25,6 +25,31 @@ import {
   formatNumberInput,
 } from "../lib/numberFormat";
 
+function Accordion({ title, icon, defaultOpen = false, children, badge }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <Card className="!p-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 text-left sm:cursor-default"
+      >
+        <span className="flex items-center gap-2 font-semibold">
+          {icon}
+          {title}
+          {badge != null && (
+            <span className="text-xs text-gray-500 font-normal">({badge})</span>
+          )}
+        </span>
+        <span className="sm:hidden text-gray-500">{open ? "▾" : "▸"}</span>
+      </button>
+      <div className={`px-4 pb-4 ${open ? "block" : "hidden"} sm:block`}>
+        {children}
+      </div>
+    </Card>
+  );
+}
+
 export default function Sales() {
   const { t } = useTranslation();
   const { user } = useAuthStore();
@@ -35,28 +60,24 @@ export default function Sales() {
   const [openingShift, setOpeningShift] = useState(false);
   const [err, setErr] = useState("");
 
-  // корзина
   const [cart, setCart] = useState([]);
   const [scanValue, setScanValue] = useState("");
   const [busy, setBusy] = useState(false);
   const scanRef = useRef(null);
 
-  // камера
   const [scannerOpen, setScannerOpen] = useState(false);
 
-  // поиск товаров
   const [searchName, setSearchName] = useState("");
   const [searchPrice, setSearchPrice] = useState("");
   const [searchResults, setSearchResults] = useState([]);
+  const [searchEmptyReason, setSearchEmptyReason] = useState("");
   const [searching, setSearching] = useState(false);
   const [showResults, setShowResults] = useState(false);
   const searchWrapperRef = useRef(null);
 
-  // модалка закрытия смены
   const [closeModal, setCloseModal] = useState(false);
   const [salesList, setSalesList] = useState([]);
 
-  // Загрузка текущей смены продавца
   const loadShift = async () => {
     if (!user?.email) return;
     setLoading(true);
@@ -84,7 +105,6 @@ export default function Sales() {
     loadShift();
   }, [user?.email]);
 
-  // Закрытие выпадающего списка поиска по клику вне
   useEffect(() => {
     const onClick = (e) => {
       if (
@@ -98,7 +118,6 @@ export default function Sales() {
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
-  // Открытие смены
   const handleOpenShift = async (e) => {
     e?.preventDefault?.();
     setErr("");
@@ -140,7 +159,6 @@ export default function Sales() {
     }
   };
 
-  // Поиск batchItem по штрихкоду
   const findItemByBarcode = async (barcode) => {
     const q = query(
       collection(db, "batchItems"),
@@ -159,7 +177,7 @@ export default function Sales() {
         ? Number(item.remainingQty)
         : Number(item.qty) || 0;
     if (remaining <= 0) {
-      setErr(t("noStock"));
+      setErr(t("productOutOfStock"));
       return;
     }
     setCart((prev) => {
@@ -189,7 +207,6 @@ export default function Sales() {
     });
   };
 
-  // Обработка кода из поля ввода или камеры
   const handleAddByCode = async (code) => {
     const trimmed = String(code || "").trim();
     if (!trimmed) return;
@@ -198,7 +215,15 @@ export default function Sales() {
     try {
       const item = await findItemByBarcode(trimmed);
       if (!item) {
-        setErr(t("barcodeNotFound"));
+        setErr(t("productNotFound"));
+        return;
+      }
+      const remaining =
+        item.remainingQty != null
+          ? Number(item.remainingQty)
+          : Number(item.qty) || 0;
+      if (remaining <= 0) {
+        setErr(t("productOutOfStock"));
         return;
       }
       pushToCart(item);
@@ -229,20 +254,16 @@ export default function Sales() {
     if (!nameQ && (searchPrice === "" || isNaN(priceQ))) {
       setSearchResults([]);
       setShowResults(false);
+      setSearchEmptyReason("");
       return;
     }
-
     setSearching(true);
     try {
       const q = query(collection(db, "batchItems"), limit(500));
       const snap = await getDocs(q);
       const all = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-      const filtered = all.filter((it) => {
-        const remaining =
-          it.remainingQty != null
-            ? Number(it.remainingQty)
-            : Number(it.qty) || 0;
-        if (remaining <= 0) return false;
+
+      const matchesByNamePrice = all.filter((it) => {
         if (nameQ) {
           const inName = it.name?.toLowerCase().includes(nameQ);
           const inBarcode = it.barcode?.toLowerCase().includes(nameQ);
@@ -254,8 +275,28 @@ export default function Sales() {
         }
         return true;
       });
-      setSearchResults(filtered.slice(0, 20));
-      setShowResults(true);
+
+      const inStock = matchesByNamePrice.filter((it) => {
+        const remaining =
+          it.remainingQty != null
+            ? Number(it.remainingQty)
+            : Number(it.qty) || 0;
+        return remaining > 0;
+      });
+
+      if (inStock.length > 0) {
+        setSearchResults(inStock.slice(0, 20));
+        setShowResults(true);
+        setSearchEmptyReason("");
+      } else if (matchesByNamePrice.length > 0) {
+        setSearchResults([]);
+        setShowResults(true);
+        setSearchEmptyReason(t("productOutOfStock"));
+      } else {
+        setSearchResults([]);
+        setShowResults(true);
+        setSearchEmptyReason(t("productNotFoundByName"));
+      }
     } catch (e) {
       setErr(e.message);
     } finally {
@@ -276,6 +317,7 @@ export default function Sales() {
     setSearchResults([]);
     setSearchName("");
     setSearchPrice("");
+    setSearchEmptyReason("");
   };
 
   const updateCartQty = (idx, value) => {
@@ -436,7 +478,6 @@ export default function Sales() {
 
   if (loading) return <p className="text-gray-500 text-sm">...</p>;
 
-  // Экран открытия смены
   if (!shift) {
     return (
       <div className="space-y-4 max-w-md mx-auto">
@@ -458,7 +499,6 @@ export default function Sales() {
     );
   }
 
-  // Экран продаж
   return (
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
@@ -490,7 +530,7 @@ export default function Sales() {
             {formatNumberDisplay(shift.totalQty || 0)}
           </p>
         </Card>
-        <Card>
+        <Card className="col-span-2 sm:col-span-1">
           <p className="text-xs text-gray-500">{t("totalSales")}</p>
           <p className="text-xl font-bold text-green-600">
             {formatNumberDisplay(shift.totalSales || 0)}
@@ -498,8 +538,7 @@ export default function Sales() {
         </Card>
       </div>
 
-      {/* Сканер по штрихкоду + камера */}
-      <Card>
+      <Accordion title={t("scanOrEnterBarcode")} icon={<span>📷</span>}>
         <form onSubmit={addByBarcode} className="flex gap-2">
           <input
             ref={scanRef}
@@ -525,13 +564,9 @@ export default function Sales() {
             {t("add")}
           </button>
         </form>
-      </Card>
+      </Accordion>
 
-      {/* Поиск по названию/штрихкоду и по цене */}
-      <Card>
-        <h3 className="font-semibold mb-3 text-sm">
-          {t("searchProductsTitle")}
-        </h3>
+      <Accordion title={t("searchProductsTitle")} icon={<span>🔍</span>}>
         <div className="relative" ref={searchWrapperRef}>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <input
@@ -570,6 +605,7 @@ export default function Sales() {
                 setSearchPrice("");
                 setSearchResults([]);
                 setShowResults(false);
+                setSearchEmptyReason("");
               }}
               className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-700"
             >
@@ -581,7 +617,7 @@ export default function Sales() {
             <ul className="absolute z-40 left-0 right-0 mt-1 max-h-72 overflow-y-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg">
               {searchResults.length === 0 ? (
                 <li className="px-3 py-2 text-sm text-gray-500">
-                  {t("noProductsFound")}
+                  {searchEmptyReason || t("noProductsFound")}
                 </li>
               ) : (
                 searchResults.map((r) => (
@@ -613,9 +649,8 @@ export default function Sales() {
             </ul>
           )}
         </div>
-      </Card>
+      </Accordion>
 
-      {/* Корзина */}
       <Card>
         <h3 className="font-semibold mb-3">
           {t("cart")}{" "}
@@ -645,8 +680,10 @@ export default function Sales() {
                     key={c.batchItemId}
                     className="border-b border-gray-100 dark:border-gray-800/50"
                   >
-                    <td className="py-2 pr-3 font-medium">{c.name}</td>
-                    <td className="py-2 pr-3 font-mono text-xs text-gray-500">
+                    <td className="py-2 pr-3 font-medium text-gray-900 dark:text-gray-100">
+                      {c.name}
+                    </td>
+                    <td className="py-2 pr-3 font-mono text-xs text-gray-500 dark:text-gray-400">
                       {c.barcode}
                     </td>
                     <td className="py-2 pr-3 text-right">
@@ -656,13 +693,15 @@ export default function Sales() {
                         max={c.maxQty}
                         value={c.qty}
                         onChange={(e) => updateCartQty(idx, e.target.value)}
-                        className="w-16 px-2 py-1 border border-gray-300 dark:border-gray-700 rounded text-right"
+                        className="w-16 px-2 py-1 border border-gray-300 dark:border-gray-700
+                                   rounded text-right bg-white dark:bg-gray-800
+                                   text-gray-900 dark:text-gray-100"
                       />
                     </td>
-                    <td className="py-2 pr-3 text-right">
+                    <td className="py-2 pr-3 text-right text-gray-900 dark:text-gray-100">
                       {formatNumberDisplay(c.salePrice)}
                     </td>
-                    <td className="py-2 pr-3 text-right font-semibold">
+                    <td className="py-2 pr-3 text-right font-semibold text-gray-900 dark:text-gray-100">
                       {formatNumberDisplay(c.qty * c.salePrice)}
                     </td>
                     <td className="py-2 pr-3 text-right">
@@ -679,14 +718,17 @@ export default function Sales() {
               </tbody>
               <tfoot>
                 <tr className="font-semibold border-t border-gray-300 dark:border-gray-700">
-                  <td className="py-2 pr-3" colSpan={2}>
+                  <td
+                    className="py-2 pr-3 text-gray-900 dark:text-gray-100"
+                    colSpan={2}
+                  >
                     {t("totals")}
                   </td>
-                  <td className="py-2 pr-3 text-right">
+                  <td className="py-2 pr-3 text-right text-gray-900 dark:text-gray-100">
                     {formatNumberDisplay(cartQty)}
                   </td>
                   <td className="py-2 pr-3" />
-                  <td className="py-2 pr-3 text-right">
+                  <td className="py-2 pr-3 text-right text-gray-900 dark:text-gray-100">
                     {formatNumberDisplay(cartTotal)}
                   </td>
                   <td className="py-2 pr-3" />
@@ -718,7 +760,6 @@ export default function Sales() {
         </div>
       </Card>
 
-      {/* Модалка закрытия смены */}
       {closeModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-900 rounded-card w-full max-w-md p-5 max-h-[90vh] overflow-y-auto">
@@ -795,7 +836,6 @@ export default function Sales() {
         </div>
       )}
 
-      {/* Модалка сканера камеры */}
       {scannerOpen && (
         <BarcodeScannerModal
           onClose={() => setScannerOpen(false)}
