@@ -73,8 +73,8 @@ export default function BatchDetails() {
   const [saving, setSaving] = useState(false);
   const [formErr, setFormErr] = useState("");
 
-  const [catalog, setCatalog] = useState([]); // products[]
-  const [categories, setCategories] = useState([]); // categories[]
+  const [catalog, setCatalog] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [suggestions, setSuggestions] = useState([]);
   const [showSuggest, setShowSuggest] = useState(false);
   const [highlighted, setHighlighted] = useState(-1);
@@ -82,7 +82,6 @@ export default function BatchDetails() {
 
   const [now, setNow] = useState(Date.now());
 
-  // Загрузка партии и товаров
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -111,7 +110,6 @@ export default function BatchDetails() {
     load();
   }, [batchId]);
 
-  // Тик каждую секунду
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
@@ -135,7 +133,6 @@ export default function BatchDetails() {
     return `${pad(h)}:${pad(m)}:${pad(s)}`;
   }, [deadline, remainingMs]);
 
-  // При открытии модалки — каталог товаров и категории
   useEffect(() => {
     if (!modalOpen) return;
     const loadData = async () => {
@@ -153,7 +150,6 @@ export default function BatchDetails() {
     loadData();
   }, [modalOpen]);
 
-  // Закрытие подсказок
   useEffect(() => {
     const onClick = (e) => {
       if (
@@ -305,6 +301,7 @@ export default function BatchDetails() {
         category: categoryName,
         unit: form.unit,
         qty,
+        remainingQty: qty, // ← ДОБАВЛЕНО: остаток на складе
         purchasePrice: pPrice,
         salePrice: sPrice,
         purchaseTotal: pTotal,
@@ -370,16 +367,9 @@ export default function BatchDetails() {
         "products",
         `В партию добавлен товар «${form.name.trim()}» (${qty} ${
           form.unit
-        }, категория: ${categoryName}, штрихкод ${barcode})`,
+        }, штрихкод ${barcode})`,
         itemRef.id,
-        {
-          batchId,
-          qty,
-          purchasePrice: pPrice,
-          salePrice: sPrice,
-          barcode,
-          category: categoryName,
-        }
+        { batchId, qty, purchasePrice: pPrice, salePrice: sPrice, barcode }
       );
 
       setItems((prev) => [
@@ -391,6 +381,7 @@ export default function BatchDetails() {
           category: categoryName,
           unit: form.unit,
           qty,
+          remainingQty: qty,
           purchasePrice: pPrice,
           salePrice: sPrice,
           purchaseTotal: pTotal,
@@ -592,7 +583,6 @@ export default function BatchDetails() {
         )}
       </Card>
 
-      {/* Модалка «Новый товар» */}
       {modalOpen && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-gray-900 rounded-card w-full max-w-lg p-5 max-h-[90vh] overflow-y-auto">
@@ -607,7 +597,6 @@ export default function BatchDetails() {
             </div>
 
             <form onSubmit={handleCreate} className="space-y-3">
-              {/* Название */}
               <div className="relative" ref={nameWrapperRef}>
                 <label className="block text-sm mb-1">{t("name")} *</label>
                 <input
@@ -644,7 +633,6 @@ export default function BatchDetails() {
                 )}
               </div>
 
-              {/* Категория */}
               <div>
                 <label className="block text-sm mb-1">{t("category")} *</label>
                 <select
@@ -669,7 +657,6 @@ export default function BatchDetails() {
                 )}
               </div>
 
-              {/* Мера */}
               <div>
                 <label className="block text-sm mb-1">{t("unit")} *</label>
                 <select
@@ -689,7 +676,6 @@ export default function BatchDetails() {
                 </select>
               </div>
 
-              {/* Количество */}
               <div>
                 <label className="block text-sm mb-1">{t("qty")} *</label>
                 <input
@@ -703,7 +689,6 @@ export default function BatchDetails() {
                 />
               </div>
 
-              {/* Покупная цена */}
               <div>
                 <label className="block text-sm mb-1">
                   {t("purchasePrice")} *
@@ -719,7 +704,6 @@ export default function BatchDetails() {
                 />
               </div>
 
-              {/* Итоговая покупная */}
               <div>
                 <label className="block text-sm mb-1">
                   {t("purchaseTotal")}
@@ -732,7 +716,6 @@ export default function BatchDetails() {
                 />
               </div>
 
-              {/* Продажная цена */}
               <div>
                 <label className="block text-sm mb-1">{t("salePrice")} *</label>
                 <input
@@ -746,7 +729,6 @@ export default function BatchDetails() {
                 />
               </div>
 
-              {/* Итоговая продажная */}
               <div>
                 <label className="block text-sm mb-1">{t("saleTotal")}</label>
                 <input
